@@ -1,0 +1,217 @@
+name: Community Daily Triage
+
+on:
+  schedule:
+    - cron: "30 9 * * *"
+      timezone: "Asia/Shanghai"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  MAINTAINER: helsome
+  REVIEW_REMINDER_HOURS: "48"
+  AUTHOR_REMINDER_DAYS: "7"
+  CLAIM_WARNING_DAYS: "3"
+
+jobs:
+  triage:
+    name: Sweep claims and review queues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Review community queues
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const maintainer = process.env.MAINTAINER;
+            const now = new Date();
+            const reviewReminderHours = Number(process.env.REVIEW_REMINDER_HOURS || 48);
+            const authorReminderDays = Number(process.env.AUTHOR_REMINDER_DAYS || 7);
+            const claimWarningDays = Number(process.env.CLAIM_WARNING_DAYS || 3);
+
+            const summary = {
+              expiredClaims: [],
+              claimWarnings: [],
+              reviewReminders: [],
+              authorReminders: []
+            };
+
+            async function removeLabel(issue_number, name) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+
+            // 1) Sweep contributor claims created by /claim.
+            const claimedIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              labels: 'claimed',
+              per_page: 100
+            });
+
+            const claimPattern = /<!-- folio-claim user=([^\s]+) claimed_at=([^\s]+) expires_at=([^\s]+) -->/;
+
+            for (const issue of claimedIssues.filter(item => !item.pull_request)) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: issue.number,
+                per_page: 100
+              });
+
+              let claim = null;
+              for (let i = comments.length - 1; i >= 0; i--) {
+                const match = String(comments[i].body || '').match(claimPattern);
+                if (match) {
+                  claim = {
+                    user: match[1],
+                    claimedAt: match[2],
+                    expiresAt: match[3]
+                  };
+                  break;
+                }
+              }
+              if (!claim) continue;
+
+              const expires = new Date(claim.expiresAt);
+              if (Number.isNaN(expires.getTime())) continue;
+
+              if (now >= expires) {
+                await removeLabel(issue.number, 'claimed');
+                try {
+                  await github.rest.issues.removeAssignees({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    assignees: [claim.user]
+                  });
+                } catch (error) {
+                  core.warning(`Unable to remove expired assignee @${claim.user}: ${error.message}`);
+                }
+
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: `<!-- folio-claim-expired claimed_at=${claim.claimedAt} -->\n@${claim.user} 本次认领已到期，任务已自动释放。若你仍计划继续，可以重新评论 \`/claim\`；否则其他贡献者现在可以接手。`
+                });
+                summary.expiredClaims.push(`#${issue.number} @${claim.user}`);
+                continue;
+              }
+
+              const daysLeft = (expires.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
+              if (daysLeft <= claimWarningDays) {
+                const reminderMarker = `<!-- folio-claim-reminder claimed_at=${claim.claimedAt} -->`;
+                const alreadyReminded = comments.some(c => String(c.body || '').includes(reminderMarker));
+                if (!alreadyReminded) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    body: `${reminderMarker}\n@${claim.user} 这个任务的认领将在 **${claim.expiresAt.slice(0, 10)}** 到期。如果仍在处理，请评论 \`/claim\` 续期；如果暂时不做，可以评论 \`/release\`。`
+                  });
+                  summary.claimWarnings.push(`#${issue.number} @${claim.user}`);
+                }
+              }
+            }
+
+            // 2) Remind the maintainer about PRs that have not received a maintainer review.
+            const openPulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100
+            });
+
+            for (const pr of openPulls) {
+              if (pr.draft || pr.user.login === maintainer) continue;
+
+              const ageHours = (now.getTime() - new Date(pr.created_at).getTime()) / (60 * 60 * 1000);
+              const labels = (pr.labels || []).map(l => typeof l === 'string' ? l : l.name);
+
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pr.number,
+                per_page: 100
+              });
+              const hasMaintainerReview = reviews.some(r => r.user && r.user.login === maintainer);
+
+              if (!hasMaintainerReview && ageHours >= reviewReminderHours) {
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  per_page: 100
+                });
+                const marker = '<!-- folio-maintainer-review-reminder -->';
+                const alreadyReminded = comments.some(c => String(c.body || '').includes(marker));
+
+                if (!alreadyReminded) {
+                  try {
+                    await github.rest.pulls.requestReviewers({
+                      owner,
+                      repo,
+                      pull_number: pr.number,
+                      reviewers: [maintainer]
+                    });
+                  } catch (error) {
+                    core.warning(`Unable to re-request @${maintainer}: ${error.message}`);
+                  }
+
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    body: `${marker}\n@${maintainer} 这个 PR 已等待 Review 超过 ${reviewReminderHours} 小时。@${pr.user.login} 无需重复催促，bot 已自动提醒维护者。`
+                  });
+                  summary.reviewReminders.push(`#${pr.number} @${pr.user.login}`);
+                }
+              }
+
+              // 3) One gentle reminder when a PR has been waiting on its author for a week.
+              if (labels.includes('waiting-on-author')) {
+                const idleDays = (now.getTime() - new Date(pr.updated_at).getTime()) / (24 * 60 * 60 * 1000);
+                if (idleDays >= authorReminderDays) {
+                  const comments = await github.paginate(github.rest.issues.listComments, {
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    per_page: 100
+                  });
+                  const marker = '<!-- folio-author-reminder -->';
+                  const alreadyReminded = comments.some(c => String(c.body || '').includes(marker));
+                  if (!alreadyReminded) {
+                    await github.rest.issues.createComment({
+                      owner,
+                      repo,
+                      issue_number: pr.number,
+                      body: `${marker}\n@${pr.user.login} 这个 PR 当前处于 \`waiting-on-author\`，已经一段时间没有更新。如果需要帮助可以直接说明；如果已经处理完 Review 意见，push 新提交后 bot 会重新放回 Review 队列。`
+                    });
+                    summary.authorReminders.push(`#${pr.number} @${pr.user.login}`);
+                  }
+                }
+              }
+            }
+
+            await core.summary
+              .addHeading('Folio Community Daily Triage')
+              .addTable([
+                [{ data: 'Category', header: true }, { data: 'Count', header: true }],
+                ['Expired claims released', String(summary.expiredClaims.length)],
+                ['Claim expiry warnings', String(summary.claimWarnings.length)],
+                ['Maintainer review reminders', String(summary.reviewReminders.length)],
+                ['Waiting-on-author reminders', String(summary.authorReminders.length)]
+              ])
+              .addRaw(`\nExpired claims: ${summary.expiredClaims.join(', ') || 'none'}\n`)
+              .addRaw(`\nReview reminders: ${summary.reviewReminders.join(', ') || 'none'}\n`)
+              .write();
