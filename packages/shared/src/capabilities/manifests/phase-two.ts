@@ -15,7 +15,7 @@ import { defineCapability } from '../define.ts';
 import { normalizeSymbol } from '../validate.ts';
 import type { CapabilityFetchers } from '../fetchers.ts';
 import { defaultCapabilityFetchers } from '../fetchers.ts';
-import { reconcileFinancialReportResults } from '../../providers/financial-report-reconciliation.ts';
+import { reconcileFinancialReportResults, reconcileFinancialReportResultsWithFx } from '../../providers/financial-report-reconciliation.ts';
 
 // ── market.depth ────────────────────────────────────────────────────────────
 
@@ -187,8 +187,13 @@ export function createCompanyFinancialsCapability(
       const candidateResults = await fetchers.getFinancialReportCandidates?.(
         symbol, input.kind ?? 'ALL', input.report
       );
+      const policyForMetric = fetchers.getFinancialReconciliationPolicy ?? (() => ({}));
       const reconciled = candidateResults
-        ? reconcileFinancialReportResults(candidateResults)
+        ? fetchers.getCurrencyConversion
+          ? await reconcileFinancialReportResultsWithFx(
+            candidateResults, policyForMetric, fetchers.getCurrencyConversion
+          )
+          : reconcileFinancialReportResults(candidateResults, policyForMetric)
         : undefined;
       // Reuse the existing fetch path for a complete failure so its stable
       // ProviderFetchError is preserved for callers.
@@ -226,7 +231,7 @@ export function createCompanyFinancialsCapability(
               providers: [...new Set(reconciled.comparisons.flatMap(
                 ({ result }) => result.candidates.map((candidate) => candidate.provider)
               ))],
-              method: 'folio-financial-report/v1',
+              method: 'folio-financial-report/v1; optional sourced balance-sheet FX',
               comparisons: reconciled.comparisons,
             },
             lineage: [{

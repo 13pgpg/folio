@@ -163,4 +163,69 @@ describe('live router comparison paths', () => {
     expect(comparison.normalizations?.[1].comparableValue).toBe(100);
     expect(comparison.normalizations?.[1].conversions[0].source).toBe('fixture fixing');
   });
+
+  it('uses a field-specific provider priority for a material conflict', async () => {
+    const router = routerWith('company.financials', report(100), report(130));
+    const results = await router.executeAll<FinancialReport>('company.financials', { symbol: 'AAPL.US' });
+    const reconciled = reconcileFinancialReportResults(results, (metric) => metric === 'IS.Revenue'
+      ? { version: 'revenue-priority/1', providerPriority: ['fallback', 'primary'] }
+      : {});
+    const comparison = reconciled.comparisons[0].result;
+    expect(comparison.state).toBe('material-conflict');
+    expect(comparison.selected?.provider).toBe('fallback');
+    expect(comparison.selectedReason).toContain('policy priority');
+    expect(comparison.policyVersion).toBe('revenue-priority/1');
+  });
+
+  it('applies field policy through the live capability path', async () => {
+    const fetchers = createRouterFetchers(
+      routerWith('company.financials', report(100), report(130)),
+      { financialReconciliationPolicy: (metric) => metric === 'IS.Revenue'
+        ? { version: 'revenue-priority/1', providerPriority: ['fallback', 'primary'] }
+        : {} }
+    );
+    const result = await createCompanyFinancialsCapability(fetchers).execute({ symbol: 'AAPL.US' }, {});
+    const comparison = result.evidence?.reconciliation?.comparisons?.[0].result;
+    expect(comparison?.state).toBe('material-conflict');
+    expect(comparison?.selected?.provider).toBe('fallback');
+    expect(comparison?.policyVersion).toBe('revenue-priority/1');
+    expect(result.summary).toContain('Provider disagreement');
+  });
+
+  it('uses a dated sourced balance-sheet rate and preserves the originals', async () => {
+    const usd = report(100, 'USD');
+    const eur = report(50, 'EUR');
+    usd.statements.BS = usd.statements.IS;
+    eur.statements.BS = eur.statements.IS;
+    delete usd.statements.IS;
+    delete eur.statements.IS;
+    const asOf = 1_735_689_600_000;
+    const fetchers = createRouterFetchers(routerWith('company.financials', usd, eur), {
+      currencyConversion: async (from, to, date) => ({
+        from, to, factor: 2, asOf: date, source: 'dated fixture ECB fixing',
+      }),
+    });
+    const result = await createCompanyFinancialsCapability(fetchers).execute({ symbol: 'AAPL.US' }, {});
+    const comparison = result.evidence?.reconciliation?.comparisons?.[0].result;
+    expect(comparison?.state).toBe('agreement');
+    expect(comparison?.policyVersion).toBe('folio-financial-report-fx/v1');
+    expect(comparison?.candidates.map((candidate) => candidate.value)).toEqual([100, 50]);
+    expect(comparison?.normalizations?.[1].comparableValue).toBe(100);
+    expect(comparison?.normalizations?.[1].conversions[0].source).toBe('dated fixture ECB fixing');
+    expect(comparison?.normalizations?.[1].conversions[0].asOf).toBe(asOf);
+  });
+
+  it('does not treat a single-day FX fixing as a flow-statement period rate', async () => {
+    let requested = false;
+    const fetchers = createRouterFetchers(
+      routerWith('company.financials', report(100, 'USD'), report(50, 'EUR')),
+      { currencyConversion: async () => {
+        requested = true;
+        return { from: 'EUR', to: 'USD', factor: 2, asOf: 1_735_689_600_000, source: 'spot fixture' };
+      } }
+    );
+    const result = await createCompanyFinancialsCapability(fetchers).execute({ symbol: 'AAPL.US' }, {});
+    expect(result.evidence?.reconciliation?.comparisons?.[0].result.state).toBe('incomparable');
+    expect(requested).toBe(false);
+  });
 });

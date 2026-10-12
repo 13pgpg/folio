@@ -17,6 +17,8 @@ import type {
   NewsItem,
   PortfolioSnapshot,
   ProviderResult,
+  ReconciliationConversion,
+  ReconciliationPolicy,
   ProviderProvenance,
   Quote,
   StaticInfo,
@@ -94,6 +96,12 @@ export interface CapabilityFetchers {
     kind?: 'IS' | 'BS' | 'CF' | 'ALL',
     report?: string
   ) => Promise<ProviderResult<FinancialReport>[]>;
+  /** Versioned field policy, e.g. IS.Revenue or BS.TotalAssets. */
+  getFinancialReconciliationPolicy?: (metric: string) => Partial<ReconciliationPolicy>;
+  /** An explicitly sourced and dated rate; absent rates leave values incomparable. */
+  getCurrencyConversion?: (
+    from: string, to: string, asOf: number
+  ) => Promise<ReconciliationConversion | undefined>;
   getInstitutionRating: (symbol: string) => Promise<InstitutionRating>;
   getDividends: (symbol: string) => Promise<DividendRecord[]>;
   getEpsForecasts: (symbol: string) => Promise<EpsForecast[]>;

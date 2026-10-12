@@ -3,6 +3,7 @@ import type {
   FinancialReport,
   ProviderResult,
   ReconciliationPolicy,
+  ReconciliationConversion,
   ReconciliationResult,
 } from '@finagent/core';
 import { reconcileFinancialFacts } from '@finagent/core';
@@ -22,11 +23,7 @@ export interface FinancialReportReconciliation {
 /** Compare equal statement fields and fiscal periods from every successful provider. */
 export function reconcileFinancialReportResults(
   results: ProviderResult<FinancialReport>[],
-  policyForMetric: (metric: string) => Partial<Pick<
-    ReconciliationPolicy,
-    'version' | 'absoluteTolerance' | 'relativeTolerance' | 'currencyConversions'
-      | 'unitConversions' | 'maxConversionSkewMs'
-  >> = () => ({})
+  policyForMetric: (metric: string) => Partial<ReconciliationPolicy> = () => ({})
 ): FinancialReportReconciliation {
   const successes = results.filter(
     (result): result is Extract<ProviderResult<FinancialReport>, { ok: true }> => result.ok
@@ -77,4 +74,56 @@ export function reconcileFinancialReportResults(
     return { metric, period, result: reconcileFinancialFacts(candidates, policy) };
   });
   return { selected: successes[0], comparisons };
+}
+
+/** Resolve dated balance-sheet FX only; flow statements need a period rate. */
+export async function reconcileFinancialReportResultsWithFx(
+  results: ProviderResult<FinancialReport>[],
+  policyForMetric: (metric: string) => Partial<ReconciliationPolicy>,
+  resolveCurrency: (from: string, to: string, asOf: number) => Promise<ReconciliationConversion | undefined>
+): Promise<FinancialReportReconciliation> {
+  const initial = reconcileFinancialReportResults(results, policyForMetric);
+  const rates = new Map<string, Promise<ReconciliationConversion | undefined>>();
+  const comparisons = await Promise.all(initial.comparisons.map(async (comparison) => {
+    const { candidates } = comparison.result;
+    const target = candidates[0];
+    if (!comparison.metric.startsWith('BS.') || candidates.length < 2
+      || !target?.currency || target.asOf === undefined || !Number.isFinite(target.asOf)
+      || candidates.some((candidate) => !candidate.currency || candidate.asOf === undefined
+        || !Number.isFinite(candidate.asOf))) {
+      return comparison;
+    }
+    const conversions = await Promise.all(candidates.slice(1)
+      .filter((candidate) => candidate.currency !== target.currency)
+      .map((candidate) => {
+        const from = candidate.currency!;
+        const to = target.currency!;
+        const asOf = candidate.asOf!;
+        const key = `${from}:${to}:${new Date(asOf).toISOString().slice(0, 10)}`;
+        let rate = rates.get(key);
+        if (!rate) {
+          rate = resolveCurrency(from, to, asOf);
+          rates.set(key, rate);
+        }
+        return rate;
+      }));
+    const available = conversions.filter(
+      (conversion): conversion is ReconciliationConversion => conversion !== undefined
+    );
+    if (available.length === 0) return comparison;
+    const overrides = policyForMetric(comparison.metric);
+    const result = reconcileFinancialFacts(candidates, {
+      version: 'folio-financial-report-fx/v1',
+      absoluteTolerance: 0,
+      providerPriority: [...new Set(candidates.map((candidate) => candidate.provider))],
+      maxAsOfSkewMs: 24 * 60 * 60 * 1000,
+      requireAsOfCalendarDate: true,
+      requireCurrency: true,
+      ...overrides,
+      currencyConversions: [...(overrides.currencyConversions ?? []), ...available],
+      maxConversionSkewMs: overrides.maxConversionSkewMs ?? 4 * 24 * 60 * 60 * 1000,
+    });
+    return { ...comparison, result };
+  }));
+  return { ...initial, comparisons };
 }

@@ -121,9 +121,11 @@ const SourceDetails: React.FC<{
     );
   }
 
-  const disputed = envelope.reconciliation?.comparisons?.filter(
+  const comparisons = envelope.reconciliation?.comparisons ?? [];
+  const disputed = comparisons.filter(
     ({ result }) => result.state === 'material-conflict' || result.state === 'incomparable'
-  ) ?? [];
+  );
+  const insufficient = comparisons.some(({ result }) => result.state === 'insufficient-sources');
 
   return (
     <div className="flex flex-col gap-2" data-testid="source-details">
@@ -133,6 +135,8 @@ const SourceDetails: React.FC<{
             <AlertTriangle className="h-3 w-3" aria-hidden="true" />
             {t('agent.sources.disputed', { count: disputed.length })}
           </span>
+        ) : insufficient ? (
+          <span className="text-foreground/60">{t('agent.sources.insufficientSources')}</span>
         ) : (
           <span className="flex items-center gap-1 text-positive">
             <Check className="h-3 w-3" aria-hidden="true" />
@@ -166,7 +170,7 @@ const SourceDetails: React.FC<{
         </div>
       )}
 
-      {disputed.length > 0 && (
+      {comparisons.length > 0 && (
         <section className="rounded-[10px] border mac-list-row p-3" data-testid="source-reconciliation">
           <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground/70">
             {t('agent.sources.reconciliation')}
@@ -175,7 +179,7 @@ const SourceDetails: React.FC<{
             {t('agent.sources.reconciliationHint')}
           </p>
           <div className="mt-2 space-y-2">
-            {disputed.map(({ metric, period, result }, index) => (
+            {comparisons.map(({ metric, period, result }, index) => (
               <details key={`${metric}:${period}`} open={index === 0} className="rounded-[8px] border border-border px-2.5 py-2">
                 <summary className="cursor-pointer text-[11.5px] font-medium text-foreground/85">
                   {metric} · {period} · {t(`agent.sources.reconciliationState.${result.state}`)}
@@ -188,13 +192,23 @@ const SourceDetails: React.FC<{
                         {candidate.value} {candidate.currency ?? candidate.unit ?? ''}
                         {formatFactDate(candidate.asOf)}
                       </span>
+                      <span className="w-full text-[10px] text-foreground/55">
+                        {[candidate.unit, candidate.adjustment, candidate.period].filter(Boolean).join(' · ')}
+                      </span>
                     </div>
                   ))}
+                  {result.normalizations?.flatMap((normalization) => normalization.conversions.map((conversion) => (
+                    <p key={`${normalization.provider}:${conversion.from}:${conversion.to}`} className="text-[10px] text-foreground/60">
+                      {normalization.provider}: {normalization.comparableValue} {normalization.comparableCurrency ?? normalization.comparableUnit ?? ''}
+                      {' · '}{conversion.source}
+                    </p>
+                  )))}
                   <p className="pt-1 text-[11px] text-foreground/60">
                     {result.selected
                       ? t('agent.sources.selectedReconciliationProvider', { provider: result.selected.provider })
                       : t('agent.sources.noReconciliationSelection')}
                   </p>
+                  <p className="text-[10px] text-foreground/55">{result.selectedReason ?? result.reason} · {result.policyVersion}</p>
                 </div>
               </details>
             ))}
