@@ -258,7 +258,7 @@ export class MassiveFinancialDataProvider implements FinancialDataProvider {
         for (const kind of options.kinds) {
           const path = buildFinancialUrl(kind, ticker, options.timeframe)
           const payload = await getJson(path, apiKey, signal, endpoint)
-          const mapped = mapFinancialStatement(payload, kind, options.timeframe)
+          const mapped = mapFinancialStatement(payload, kind, options.timeframe, ticker)
           if (mapped.accounts.length > 0) {
             statements[kind] = { indicators: [{ title: kind, accounts: mapped.accounts }] }
             latestPeriodEnd = Math.max(latestPeriodEnd, mapped.latestPeriodEnd)
@@ -436,7 +436,8 @@ function parsePeriodEnd(value: unknown): number | undefined {
 function mapFinancialStatement(
   payload: unknown,
   kind: StatementKind,
-  timeframe: FinancialTimeframe
+  timeframe: FinancialTimeframe,
+  ticker: string
 ): { accounts: FinancialReportAccount[]; latestPeriodEnd: number } {
   const root = isRecord(payload) ? payload : {}
   if (root.status === 'NOT_AUTHORIZED') {
@@ -447,8 +448,12 @@ function mapFinancialStatement(
   }
   const valuesByField = new Map<string, FinancialReportValue[]>()
   let latestPeriodEnd = 0
-  for (const row of root.results) {
-    if (!isRecord(row) || row.timeframe !== timeframe) continue
+  const rows = root.results.filter(isRecord)
+    .filter((row) => Array.isArray(row.tickers) && row.tickers.includes(ticker))
+    .sort((left, right) => (parsePeriodEnd(right.period_end) ?? 0) - (parsePeriodEnd(left.period_end) ?? 0)
+      || (parsePeriodEnd(right.filing_date) ?? 0) - (parsePeriodEnd(left.filing_date) ?? 0))
+  for (const row of rows) {
+    if (row.timeframe !== timeframe) continue
     const fpEnd = parsePeriodEnd(row.period_end)
     const year = row.fiscal_year
     const quarter = row.fiscal_quarter

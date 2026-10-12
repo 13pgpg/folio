@@ -250,8 +250,8 @@ describe('MassiveFinancialDataProvider', () => {
 
   it('uses the annual filter and keeps only the requested statement', async () => {
     const calls = installFetch(() => jsonResponse({ status: 'OK', results: [
-      { timeframe: 'annual', fiscal_year: 2024, period_end: '2024-12-31', total_assets: 100 },
-      { timeframe: 'quarterly', fiscal_year: 2025, fiscal_quarter: 1, period_end: '2025-03-31', total_assets: 200 },
+      { tickers: ['AAPL'], timeframe: 'annual', fiscal_year: 2024, period_end: '2024-12-31', total_assets: 100 },
+      { tickers: ['AAPL'], timeframe: 'quarterly', fiscal_year: 2025, fiscal_quarter: 1, period_end: '2025-03-31', total_assets: 200 },
     ] }))
     const result = await makeProvider('key').execute<FinancialReport>('company.financials', {
       symbol: 'AAPL.US', kind: 'BS', report: 'af',
@@ -264,6 +264,25 @@ describe('MassiveFinancialDataProvider', () => {
       fpEnd: 1735603200, period: 'FY 2024', year: 2024, value: 100,
     }])
     expect(result.data.statements.IS).toBeUndefined()
+  })
+
+  it('ignores another ticker and picks the latest filing for the same fiscal period', async () => {
+    installFetch(() => jsonResponse({ status: 'OK', results: [
+      { tickers: ['MSFT'], timeframe: 'quarterly', fiscal_year: 2025, fiscal_quarter: 3,
+        period_end: '2025-06-28', filing_date: '2025-08-10', revenue: 900 },
+      { tickers: ['AAPL'], timeframe: 'quarterly', fiscal_year: 2025, fiscal_quarter: 3,
+        period_end: '2025-06-28', filing_date: '2025-08-01', revenue: 100 },
+      { tickers: ['AAPL'], timeframe: 'quarterly', fiscal_year: 2025, fiscal_quarter: 3,
+        period_end: '2025-06-28', filing_date: '2025-08-11', revenue: 110 },
+    ] }))
+    const result = await makeProvider('key').execute<FinancialReport>('company.financials', {
+      symbol: 'AAPL.US', kind: 'IS', report: 'qf',
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.statements.IS?.indicators[0].accounts[0].values).toEqual([{
+      fpEnd: 1751068800, filedAt: 1754870400, period: 'Q3 2025', year: 2025, value: 110,
+    }])
   })
 
   it('reports financial entitlement errors and unsupported period semantics', async () => {
