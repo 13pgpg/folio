@@ -198,7 +198,7 @@ const SourceDetails: React.FC<{
                     </div>
                   ))}
                   {result.normalizations?.flatMap((normalization) => normalization.conversions.map((conversion) => (
-                    <p key={`${normalization.provider}:${conversion.from}:${conversion.to}`} className="text-[10px] text-foreground/60">
+                    <p key={`${normalization.provider}:${conversion.from}:${conversion.to}`} className="break-all text-[10px] text-foreground/60">
                       {normalization.provider}: {normalization.comparableValue} {normalization.comparableCurrency ?? normalization.comparableUnit ?? ''}
                       {' · '}{conversion.source}
                     </p>
