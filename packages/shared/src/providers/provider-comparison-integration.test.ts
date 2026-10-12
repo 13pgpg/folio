@@ -146,4 +146,21 @@ describe('live router comparison paths', () => {
     expect(reconciled.comparisons[0].result.candidates.map((candidate) => candidate.value))
       .toEqual([100, 104]);
   });
+
+  it('uses only an explicitly sourced FX fixing for cross-currency reports', async () => {
+    const router = routerWith('company.financials', report(100, 'USD'), report(50, 'EUR'));
+    const results = await router.executeAll<FinancialReport>('company.financials', { symbol: 'AAPL.US' });
+    const asOf = 1_735_689_600_000;
+    const reconciled = reconcileFinancialReportResults(results, () => ({
+      version: 'fixture-fx/1',
+      currencyConversions: [{ from: 'EUR', to: 'USD', factor: 2, asOf, source: 'fixture fixing' }],
+      maxConversionSkewMs: 0,
+    }));
+    const comparison = reconciled.comparisons[0].result;
+    expect(comparison.state).toBe('agreement');
+    expect(comparison.policyVersion).toBe('fixture-fx/1');
+    expect(comparison.candidates.map((candidate) => candidate.value)).toEqual([100, 50]);
+    expect(comparison.normalizations?.[1].comparableValue).toBe(100);
+    expect(comparison.normalizations?.[1].conversions[0].source).toBe('fixture fixing');
+  });
 });

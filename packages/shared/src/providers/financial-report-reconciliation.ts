@@ -23,7 +23,9 @@ export interface FinancialReportReconciliation {
 export function reconcileFinancialReportResults(
   results: ProviderResult<FinancialReport>[],
   policyForMetric: (metric: string) => Partial<Pick<
-    ReconciliationPolicy, 'absoluteTolerance' | 'relativeTolerance'
+    ReconciliationPolicy,
+    'version' | 'absoluteTolerance' | 'relativeTolerance' | 'currencyConversions'
+      | 'unitConversions' | 'maxConversionSkewMs'
   >> = () => ({})
 ): FinancialReportReconciliation {
   const successes = results.filter(
@@ -67,7 +69,8 @@ export function reconcileFinancialReportResults(
       version: 'folio-financial-report/v1',
       absoluteTolerance: 0,
       providerPriority: priority,
-      maxAsOfSkewMs: 0,
+      maxAsOfSkewMs: 24 * 60 * 60 * 1000,
+      requireAsOfCalendarDate: true,
       requireCurrency: candidates[0]?.unit === 'currency',
       ...overrides,
     };
