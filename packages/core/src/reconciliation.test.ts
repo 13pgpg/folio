@@ -10,7 +10,8 @@ describe('reconcileFinancialFacts', () => {
       { version: '1', relativeTolerance: 0.03 }
     );
     expect(r.state).toBe('material-conflict');
-    expect(r.selected?.value).toBe(100);
+    expect(r.selected).toBeUndefined();
+    expect(r.candidates.map((candidate) => candidate.value)).toEqual([100, 120]);
   });
 
   it('rejects mismatched semantics', () => {
@@ -40,5 +41,34 @@ describe('reconcileFinancialFacts', () => {
     expect(r.selected?.provider).toBe('primary');
     expect(r.selected?.value).toBe(130);
     expect(r.candidates.map((candidate) => candidate.value)).toEqual([100, 130]);
+  });
+
+  it('does not compare different instruments, metrics, or market timestamps', () => {
+    const first = { ...base, provider: 'a', instrument: 'AAPL.US', metric: 'lastPrice', value: 100, asOf: 1000 };
+    const policy = { version: '2', maxAsOfSkewMs: 60_000 };
+    expect(reconcileFinancialFacts([first, { ...first, provider: 'b', instrument: 'MSFT.US' }], policy).state)
+      .toBe('incomparable');
+    expect(reconcileFinancialFacts([first, { ...first, provider: 'b', metric: 'high' }], policy).state)
+      .toBe('incomparable');
+    expect(reconcileFinancialFacts([first, { ...first, provider: 'b', asOf: 62_000 }], policy).state)
+      .toBe('incomparable');
+  });
+
+  it('refuses monetary comparison when currency metadata is absent', () => {
+    const r = reconcileFinancialFacts(
+      [{ provider: 'a', value: 100 }, { provider: 'b', value: 100 }],
+      { version: '2', requireCurrency: true }
+    );
+    expect(r.state).toBe('incomparable');
+    expect(r.selected).toBeUndefined();
+  });
+
+  it('needs two distinct providers rather than two values from one provider', () => {
+    const result = reconcileFinancialFacts(
+      [{ ...base, provider: 'a', value: 100 }, { ...base, provider: 'a', value: 130 }],
+      { version: '2' }
+    );
+    expect(result.state).toBe('insufficient-sources');
+    expect(result.sourceCount).toBe(1);
   });
 });

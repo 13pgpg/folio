@@ -16,6 +16,7 @@ import type {
   MarketTemperature,
   NewsItem,
   PortfolioSnapshot,
+  ProviderResult,
   ProviderProvenance,
   Quote,
   StaticInfo,
@@ -69,6 +70,8 @@ export interface CapabilityFetchResult<T> {
 export interface CapabilityFetchers {
   getQuote: (symbol: string) => Promise<Quote>;
   getQuoteResult?: (symbol: string, signal?: AbortSignal) => Promise<CapabilityFetchResult<Quote>>;
+  /** Opt-in multi-provider quote results for freshness-aware comparison. */
+  getQuoteCandidates?: (symbol: string, signal?: AbortSignal) => Promise<ProviderResult<Quote>[]>;
   getKline: (options: GetKlineOptions) => Promise<Kline[]>;
   getIntraday: (symbol: string) => Promise<IntradayData[]>;
   getMarketStatus: () => Promise<MarketStatus[]>;
@@ -85,6 +88,12 @@ export interface CapabilityFetchers {
     kind?: 'IS' | 'BS' | 'CF' | 'ALL',
     report?: string
   ) => Promise<FinancialReport>;
+  /** Opt-in multi-provider facts for auditable statement reconciliation. */
+  getFinancialReportCandidates?: (
+    symbol: string,
+    kind?: 'IS' | 'BS' | 'CF' | 'ALL',
+    report?: string
+  ) => Promise<ProviderResult<FinancialReport>[]>;
   getInstitutionRating: (symbol: string) => Promise<InstitutionRating>;
   getDividends: (symbol: string) => Promise<DividendRecord[]>;
   getEpsForecasts: (symbol: string) => Promise<EpsForecast[]>;

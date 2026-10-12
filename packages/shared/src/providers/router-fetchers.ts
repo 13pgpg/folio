@@ -66,6 +66,7 @@ export class ProviderFetchError extends Error {
 export interface RouterCapabilityFetchers {
   getQuote: (symbol: string) => Promise<Quote>;
   getQuoteResult: (symbol: string, signal?: AbortSignal) => Promise<CapabilityFetchResult<Quote>>;
+  getQuoteCandidates: (symbol: string, signal?: AbortSignal) => Promise<ProviderResult<Quote>[]>;
   getKline: (options: GetKlineOptions) => Promise<Kline[]>;
   getIntraday: (symbol: string) => Promise<IntradayData[]>;
   getMarketStatus: () => Promise<MarketStatus[]>;
@@ -168,6 +169,8 @@ export function createRouterFetchers(
     getQuote: (symbol) => fetch(router, 'market.quote', bindSymbolInput(symbol, {}, resolve)),
     getQuoteResult: (symbol, signal) =>
       fetchResult(router, 'market.quote', bindSymbolInput(symbol, {}, resolve), signal),
+    getQuoteCandidates: (symbol, signal) =>
+      router.executeAll<Quote>('market.quote', bindSymbolInput(symbol, {}, resolve), signal),
     getKline: (options) =>
       fetch(router, 'market.kline', bindSymbolInput(options.symbol, { ...options }, resolve)),
     getIntraday: (symbol) => fetch(router, 'market.intraday', bindSymbolInput(symbol, {}, resolve)),
